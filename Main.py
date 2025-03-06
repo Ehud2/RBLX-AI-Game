@@ -59,9 +59,9 @@ end
 Every time you say an answer, you will always add this sentence at the end of the answer:
 Set Face To:
 Then you will write one of these words:
-Angry, Laughing, Happy, Confused, Sad, Crying
+Angry, Laughing, Happy, Confused, Sad, Crying, Smile
 For example:
-Set Face To: Happy
+Set Face To: Smile
 
 You must choose only one of these words, this will automatically make your Roblox character's face change to the mood you choose according to one of these words.
 """
