@@ -95,10 +95,6 @@ def get_chat_session(user_id):
         chat_sessions[user_id] = model.start_chat(history=[])
     return chat_sessions[user_id]
 
-def remove_code_delimiters(text):
-    lines = text.splitlines()
-    filtered_lines = [line for line in lines if line.strip() != "```" and line.strip() != "```lua"]
-    return "\n".join(filtered_lines)
 
 # מסלול API לשליחת הודעה ל-Gemini
 @app.route('/generate', methods=['POST'])
@@ -115,8 +111,7 @@ def generate():
 
     chat_session = get_chat_session(user_id)
     response = chat_session.send_message(user_input)
-    modified_response = remove_code_delimiters(response.text)
-    return jsonify({"response": modified_response})
+    return jsonify({"response": response.text})
 
 # מסלול API למחיקת chat session
 @app.route('/clear_chat', methods=['POST'])
