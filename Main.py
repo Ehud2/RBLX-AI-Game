@@ -65,7 +65,7 @@ print("Hello World")
 בכל פעם שאתה אומר תשובה, אתה תמיד תוסיף את המשפט הזה בסוף התשובה:
 Set Face To: 
 לאחר מכן תכתוב אחת מהמילים הבאות:
-Angry, Laughing, Happy, Confused, Sad, Crying, Smile
+Angry, Laughing, Happy, Confused, Sad, Crying, Smile, Confident, Fear, Bored, Relaxed, Nervous, Disgusted
 לְדוּגמָה:
 הגדר פנים ל: חיוך
 
