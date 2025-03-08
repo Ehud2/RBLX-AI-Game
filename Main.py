@@ -12,7 +12,12 @@ def home():
     return "Gemini API"
 
 # קביעת מפתח API של Gemini  - עכשיו ישירות בקוד!
-genai.configure(api_key="AIzaSyDUdcllIkENNJFbE88YCBhf2PdOWkKTmEA")
+api_keys = [
+    "AIzaSyBRzUhiyvsnXW5QvNsSsRsVBcunDhhYebY",
+    "AIzaSyDUdcllIkENNJFbE88YCBhf2PdOWkKTmEA",
+    "AIzaSyC5AfKalKK_8VVYGshW8MKouUHBnGoIepc",
+    "AIzaSyARBx_1CSRfkhmUEOQMWbaypxPbp0qQ97Y"
+]
 
 # System Instructions לבינה המלאכותית
 system_instruction = """
@@ -94,7 +99,6 @@ Workspace, SoundService, Team, Players
 
 שים לב וזה חשוב מאוד: כל קוד שאתה מכין רץ בתור צד שרת ולא צד לקוח, מה שאומר שאתה לא יכול להשתמש בדברים כמו LocalPlayer, אם תרצה לגשת לשחקן מסויים אתה יכול לחפש אותו בPlayers, או להשתמש במידע שאתה מקבל בכל בקשה, ששם מצויין את שם השחקן שאיתו אתה מדבר.
 """
-
 # הגדרת מודל
 generation_config = {
     "temperature": 0.2,
@@ -107,9 +111,10 @@ generation_config = {
 # מילון לשמירת chat sessions לפי מזהה משתמש
 chat_sessions = {}
 
-def get_chat_session(user_id):
+def get_chat_session(user_id, api_key):
     global chat_sessions
     if user_id not in chat_sessions:
+        genai.configure(api_key=api_key)
         model = genai.GenerativeModel(
             model_name="gemini-2.0-flash",
             generation_config=generation_config,
@@ -118,6 +123,14 @@ def get_chat_session(user_id):
         chat_sessions[user_id] = model.start_chat(history=[])
     return chat_sessions[user_id]
 
+def try_generate_with_api_key(user_id, user_input, api_key):
+    try:
+        chat_session = get_chat_session(user_id, api_key)
+        response = chat_session.send_message(user_input)
+        return response.text
+    except Exception as e:
+        print(f"Error with API key {api_key}: {e}")
+        return None
 
 # מסלול API לשליחת הודעה ל-Gemini
 @app.route('/generate', methods=['POST'])
@@ -131,10 +144,14 @@ def generate():
 
     if not user_input:
         return jsonify({"error": "Missing input"}), 400
+    
+    for api_key in api_keys:
+        response_text = try_generate_with_api_key(user_id, user_input, api_key)
+        if response_text:
+            return jsonify({"response": response_text})
 
-    chat_session = get_chat_session(user_id)
-    response = chat_session.send_message(user_input)
-    return jsonify({"response": response.text})
+    return jsonify({"error": "All API keys failed."}), 500
+
 
 # מסלול API למחיקת chat session
 @app.route('/clear_chat', methods=['POST'])
