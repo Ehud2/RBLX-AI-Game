@@ -12,7 +12,7 @@ def home():
     return "Gemini API"
 
 # קביעת מפתח API של Gemini  - עכשיו ישירות בקוד!
-genai.configure(api_key="AIzaSyDUdcllIkENNJFbE88YCBhf2PdOWkKTmEA")
+genai.configure(api_key="AIzaSyBckr5izy2EhYK1T-xBgRNJyiYj1eQPAXw")
 
 # System Instructions לבינה המלאכותית
 system_instruction = """
