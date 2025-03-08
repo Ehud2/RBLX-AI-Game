@@ -137,17 +137,18 @@ def process_request(data):
     try:
         chat_session = get_chat_session(user_id)
         response = chat_session.send_message(user_input)
-        return jsonify({"response": response.text})
+        return jsonify({"response": response.text}) # החזרת ה-response
     except Exception as e:
         print(f"Error processing request: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Internal server error: {e}"}), 500
 
 # מסלול API לשליחת הודעה ל-Gemini
+# מסלול API לשליחת הודעה ל-Gemini
 @app.route('/generate', methods=['POST'])
 def generate():
     data = request.get_json()
     request_queue.put(data)  # הוספת הבקשה לתור
-    return jsonify({"message": "Request added to queue."}), 202  # החזרת קוד 202 כדי לציין שהבקשה התקבלה וממתינה לעיבוד
+    return process_request(data)
 
 # מסלול API למחיקת chat session
 @app.route('/clear_chat', methods=['POST'])
