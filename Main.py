@@ -5,6 +5,7 @@ import requests
 import time
 import queue
 import traceback
+from google.api_core.exceptions import ResourceExhausted
 
 app = Flask(__name__)
 
@@ -17,7 +18,6 @@ def home():
 genai.configure(api_key="AIzaSyDUdcllIkENNJFbE88YCBhf2PdOWkKTmEA")
 
 # System Instructions לבינה המלאכותית - אל תחליף את זה, פשוט תוסיף אותו ממה שיש לך בקוד המקורי
-
 system_instruction = """
 אתה בינה מלאכותית חכמה שמנהלת משחק רובלוקס בזמן אמת.
 התפקיד שלך הוא להגיב לשחקנים בשיחה טבעית, להבין את מצב המשחק, ולבצע פעולות בקוד Lua לפי צורך.
@@ -136,19 +136,74 @@ def process_request(data):
 
     try:
         chat_session = get_chat_session(user_id)
-        response = chat_session.send_message(user_input)
-        return jsonify({"response": response.text}) # החזרת ה-response
+        try:
+            response = chat_session.send_message(user_input)
+            return jsonify({"response": response.text})
+        except Exception as e:
+            print(f"Error processing request: {e}\n{traceback.format_exc()}")
+            return jsonify({"error": f"Internal server error: {e}"}), 500
     except Exception as e:
-        print(f"Error processing request: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": f"Internal server error: {e}"}), 500
+        print(f"Error getting chat session: {e}")
+        return jsonify({"error": f"Error getting chat session: {e}"}), 500
 
-# מסלול API לשליחת הודעה ל-Gemini
+def worker():
+    while True:
+        data = request_queue.get()  # קבלת בקשה מהתור
+        user_id = data.get("userId")
+        user_input = data.get("input", "")
+        try:
+            chat_session = get_chat_session(user_id)
+            while True:
+                try:
+                    response = chat_session.send_message(user_input)
+                    # אם הבקשה הצליחה, שלח את התגובה
+                    data['response'] = response.text
+                    send_response(data)
+                    break  # צא מהלולאה הפנימית אם הבקשה הצליחה
+                except ResourceExhausted as e:
+                    wait_time = 5  # זמן המתנה קבוע
+                    print(f"Quota exceeded, retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                except Exception as e:
+                    print(f"Error processing request: {e}\n{traceback.format_exc()}")
+                    data['error'] = f"Internal server error: {e}"
+                    send_response(data)
+                    break  # צא מהלולאה הפנימית אם יש שגיאה אחרת
+        except Exception as e:
+            print(f"Error getting chat session: {e}")
+            data['error'] = f"Error getting chat session: {e}"
+            send_response(data)
+        request_queue.task_done()
+
+response_queue = queue.Queue()
+
+def send_response(data):
+    response_queue.put(data)
+
+@app.route('/get_response', methods=['POST'])
+def get_response():
+    data = request.get_json()
+    user_id = data.get("userId")
+
+    if not user_id:
+        return jsonify({"error": "Missing user ID"}), 400
+
+    while True:
+        if not response_queue.empty():
+            response_data = response_queue.get()
+            if response_data.get("userId") == user_id:
+                if "response" in response_data:
+                    return jsonify({"response": response_data["response"]})
+                elif "error" in response_data:
+                    return jsonify({"error": response_data["error"]}), 500
+        time.sleep(0.1)
+
 # מסלול API לשליחת הודעה ל-Gemini
 @app.route('/generate', methods=['POST'])
 def generate():
     data = request.get_json()
     request_queue.put(data)  # הוספת הבקשה לתור
-    return process_request(data)
+    return jsonify({"message": "Request added to queue."}), 202  # החזרת קוד 202 כדי לציין שהבקשה התקבלה וממתינה לעיבוד
 
 # מסלול API למחיקת chat session
 @app.route('/clear_chat', methods=['POST'])
@@ -164,13 +219,6 @@ def clear_chat():
         return jsonify({"message": f"Chat session for user {user_id} cleared."})
     else:
         return jsonify({"message": f"No chat session found for user {user_id}."})
-
-def worker():
-    while True:
-        data = request_queue.get()  # קבלת בקשה מהתור
-        with app.app_context():  # יצירת context מתאים עבור Flask
-            process_request(data)
-        request_queue.task_done()
 
 # הפעלת worker threads
 num_threads = 3  # הגדרת מספר הthreads
