@@ -1,8 +1,10 @@
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify
 import google.generativeai as genai
 import threading
 import requests
 import time
+import queue
+import traceback
 
 app = Flask(__name__)
 
@@ -14,7 +16,8 @@ def home():
 # קביעת מפתח API של Gemini  - עכשיו ישירות בקוד!
 genai.configure(api_key="AIzaSyDUdcllIkENNJFbE88YCBhf2PdOWkKTmEA")
 
-# System Instructions לבינה המלאכותית
+# System Instructions לבינה המלאכותית - אל תחליף את זה, פשוט תוסיף אותו ממה שיש לך בקוד המקורי
+
 system_instruction = """
 אתה בינה מלאכותית חכמה שמנהלת משחק רובלוקס בזמן אמת.
 התפקיד שלך הוא להגיב לשחקנים בשיחה טבעית, להבין את מצב המשחק, ולבצע פעולות בקוד Lua לפי צורך.
@@ -107,6 +110,9 @@ generation_config = {
 # מילון לשמירת chat sessions לפי מזהה משתמש
 chat_sessions = {}
 
+# תור לבקשות
+request_queue = queue.Queue()
+
 def get_chat_session(user_id):
     global chat_sessions
     if user_id not in chat_sessions:
@@ -118,11 +124,7 @@ def get_chat_session(user_id):
         chat_sessions[user_id] = model.start_chat(history=[])
     return chat_sessions[user_id]
 
-
-# מסלול API לשליחת הודעה ל-Gemini
-@app.route('/generate', methods=['POST'])
-def generate():
-    data = request.get_json()
+def process_request(data):
     user_id = data.get("userId")
     user_input = data.get("input", "")
 
@@ -132,9 +134,20 @@ def generate():
     if not user_input:
         return jsonify({"error": "Missing input"}), 400
 
-    chat_session = get_chat_session(user_id)
-    response = chat_session.send_message(user_input)
-    return jsonify({"response": response.text})
+    try:
+        chat_session = get_chat_session(user_id)
+        response = chat_session.send_message(user_input)
+        return jsonify({"response": response.text})
+    except Exception as e:
+        print(f"Error processing request: {e}\n{traceback.format_exc()}")
+        return jsonify({"error": f"Internal server error: {e}"}), 500
+
+# מסלול API לשליחת הודעה ל-Gemini
+@app.route('/generate', methods=['POST'])
+def generate():
+    data = request.get_json()
+    request_queue.put(data)  # הוספת הבקשה לתור
+    return jsonify({"message": "Request added to queue."}), 202  # החזרת קוד 202 כדי לציין שהבקשה התקבלה וממתינה לעיבוד
 
 # מסלול API למחיקת chat session
 @app.route('/clear_chat', methods=['POST'])
@@ -150,6 +163,18 @@ def clear_chat():
         return jsonify({"message": f"Chat session for user {user_id} cleared."})
     else:
         return jsonify({"message": f"No chat session found for user {user_id}."})
+
+def worker():
+    while True:
+        data = request_queue.get()  # קבלת בקשה מהתור
+        with app.app_context():  # יצירת context מתאים עבור Flask
+            process_request(data)
+        request_queue.task_done()
+
+# הפעלת worker threads
+num_threads = 3  # הגדרת מספר הthreads
+for _ in range(num_threads):
+    threading.Thread(target=worker, daemon=True).start()
 
 # פונקציה ששולחת פינג לשרת כל כמה דקות כדי לשמור עליו דלוק
 def keep_alive():
