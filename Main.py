@@ -149,6 +149,7 @@ def generate():
         response_text = try_generate_with_api_key(user_id, user_input, api_key)
         if response_text:
             return jsonify({"response": response_text})
+            break # Exit loop if successful response is found
 
     return jsonify({"error": "All API keys failed."}), 500
 
