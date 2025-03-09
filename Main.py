@@ -1,20 +1,14 @@
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify
 import google.generativeai as genai
 import threading
 import requests
 import time
+from queue import Queue
 
 app = Flask(__name__)
 
-# הגדרת דף הבית כדי לוודא שהשרת פועל
-@app.route('/')
-def home():
-    return "Gemini API"
-
-# קביעת מפתח API של Gemini  - עכשיו ישירות בקוד!
 genai.configure(api_key="AIzaSyBckr5izy2EhYK1T-xBgRNJyiYj1eQPAXw")
 
-# System Instructions לבינה המלאכותית
 system_instruction = """
 אתה בינה מלאכותית חכמה שמנהלת משחק רובלוקס בזמן אמת.
 התפקיד שלך הוא להגיב לשחקנים בשיחה טבעית, להבין את מצב המשחק, ולבצע פעולות בקוד Lua לפי צורך.
@@ -95,7 +89,6 @@ Workspace, SoundService, Team, Players
 שים לב וזה חשוב מאוד: כל קוד שאתה מכין רץ בתור צד שרת ולא צד לקוח, מה שאומר שאתה לא יכול להשתמש בדברים כמו LocalPlayer, אם תרצה לגשת לשחקן מסויים אתה יכול לחפש אותו בPlayers, או להשתמש במידע שאתה מקבל בכל בקשה, ששם מצויין את שם השחקן שאיתו אתה מדבר.
 """
 
-# הגדרת מודל
 generation_config = {
     "temperature": 0.2,
     "top_p": 0.5,
@@ -104,22 +97,45 @@ generation_config = {
     "response_mime_type": "text/plain",
 }
 
-# מילון לשמירת chat sessions לפי מזהה משתמש
 chat_sessions = {}
+request_queue = Queue()
+lock = threading.Lock()
+request_count = 0
+start_time = time.time()
 
-def get_chat_session(user_id):
+def get_chat_session(user_id, model_name="gemini-2.0-flash"):
     global chat_sessions
     if user_id not in chat_sessions:
         model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash",
+            model_name=model_name,
             generation_config=generation_config,
             system_instruction=system_instruction
         )
         chat_sessions[user_id] = model.start_chat(history=[])
     return chat_sessions[user_id]
 
+def process_requests():
+    global request_count, start_time
+    while True:
+        user_id, user_input, response_queue = request_queue.get()
+        
+        with lock:
+            elapsed_time = time.time() - start_time
+            if elapsed_time >= 60:
+                request_count = 0
+                start_time = time.time()
+            
+            model_name = "gemini-2.0-flash" if request_count < 15 else "gemini-2.0-flash-lite"
+            request_count += 1
+        
+        chat_session = get_chat_session(user_id, model_name)
+        response = chat_session.send_message(user_input)
+        response_queue.put(response.text)
+        
+        request_queue.task_done()
 
-# מסלול API לשליחת הודעה ל-Gemini
+threading.Thread(target=process_requests, daemon=True).start()
+
 @app.route('/generate', methods=['POST'])
 def generate():
     data = request.get_json()
@@ -128,47 +144,41 @@ def generate():
 
     if not user_id:
         return jsonify({"error": "Missing user ID"}), 400
-
     if not user_input:
         return jsonify({"error": "Missing input"}), 400
 
-    chat_session = get_chat_session(user_id)
-    response = chat_session.send_message(user_input)
-    return jsonify({"response": response.text})
+    response_queue = Queue()
+    request_queue.put((user_id, user_input, response_queue))
+    response_text = response_queue.get()
+    return jsonify({"response": response_text})
 
-# מסלול API למחיקת chat session
 @app.route('/clear_chat', methods=['POST'])
 def clear_chat():
     data = request.get_json()
     user_id = data.get("userId")
-
+    
     if not user_id:
         return jsonify({"error": "Missing user ID"}), 400
-
+    
     if user_id in chat_sessions:
         del chat_sessions[user_id]
         return jsonify({"message": f"Chat session for user {user_id} cleared."})
     else:
         return jsonify({"message": f"No chat session found for user {user_id}."})
 
-# פונקציה ששולחת פינג לשרת כל כמה דקות כדי לשמור עליו דלוק
 def keep_alive():
     print("Waiting 5 minutes before starting keep-alive pings...")
-    time.sleep(300)  # 300 שניות = 5 דקות
+    time.sleep(300)
     print("Starting keep-alive pings.")
-    url = "https://web-production-d4e5.up.railway.app/"  # עדכן ל-URL שלך
-    if not url:
-        print("⚠️  לא הוגדר URL לפינג.  ודא שאתה מחליף את YOUR_RAILWAY_URL_HERE בכתובת האמיתית.")
-        return
+    url = "https://web-production-d4e5.up.railway.app/"
     while True:
         try:
             requests.get(url)
             print(f"✅ Ping sent to {url}")
         except Exception as e:
             print(f"⚠️ Ping failed: {e}")
-        time.sleep(600)  # שולח פינג כל 10 דקות
+        time.sleep(600)
 
-# הפעלת הפינג ברקע
 threading.Thread(target=keep_alive, daemon=True).start()
 
 if __name__ == '__main__':
