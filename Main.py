@@ -3,7 +3,7 @@ import google.generativeai as genai
 import threading
 import requests
 import time
-from queue import Queue
+import queue
 
 app = Flask(__name__)
 
@@ -98,12 +98,12 @@ generation_config = {
 }
 
 chat_sessions = {}
-request_queue = Queue()
+request_queue = queue.Queue()
 lock = threading.Lock()
-request_count = 0
-start_time = time.time()
+last_request_times = []
 
-def get_chat_session(user_id, model_name="gemini-2.0-flash"):
+
+def get_chat_session(user_id, model_name):
     global chat_sessions
     if user_id not in chat_sessions:
         model = genai.GenerativeModel(
@@ -114,27 +114,34 @@ def get_chat_session(user_id, model_name="gemini-2.0-flash"):
         chat_sessions[user_id] = model.start_chat(history=[])
     return chat_sessions[user_id]
 
-def process_requests():
-    global request_count, start_time
+
+def process_queue():
     while True:
         user_id, user_input, response_queue = request_queue.get()
         
         with lock:
-            elapsed_time = time.time() - start_time
-            if elapsed_time >= 60:
-                request_count = 0
-                start_time = time.time()
+            # ניהול קצב הבקשות
+            global last_request_times
+            now = time.time()
+            last_request_times = [t for t in last_request_times if now - t < 60]
             
-            model_name = "gemini-2.0-flash" if request_count < 15 else "gemini-2.0-flash-lite"
-            request_count += 1
+            if len(last_request_times) >= 15:
+                model_name = "gemini-2.0-flash-lite"
+            else:
+                model_name = "gemini-2.0-flash"
+            
+            last_request_times.append(now)
         
-        chat_session = get_chat_session(user_id, model_name)
-        response = chat_session.send_message(user_input)
-        response_queue.put(response.text)
-        
-        request_queue.task_done()
+        try:
+            chat_session = get_chat_session(user_id, model_name)
+            response = chat_session.send_message(user_input)
+            response_queue.put(response.text)
+        except Exception as e:
+            response_queue.put(f"Error: {str(e)}")
 
-threading.Thread(target=process_requests, daemon=True).start()
+
+threading.Thread(target=process_queue, daemon=True).start()
+
 
 @app.route('/generate', methods=['POST'])
 def generate():
@@ -146,30 +153,31 @@ def generate():
         return jsonify({"error": "Missing user ID"}), 400
     if not user_input:
         return jsonify({"error": "Missing input"}), 400
-
-    response_queue = Queue()
+    
+    response_queue = queue.Queue()
     request_queue.put((user_id, user_input, response_queue))
-    response_text = response_queue.get()
-    return jsonify({"response": response_text})
+    response = response_queue.get()
+    
+    return jsonify({"response": response})
+
 
 @app.route('/clear_chat', methods=['POST'])
 def clear_chat():
     data = request.get_json()
     user_id = data.get("userId")
-    
+
     if not user_id:
         return jsonify({"error": "Missing user ID"}), 400
-    
+
     if user_id in chat_sessions:
         del chat_sessions[user_id]
         return jsonify({"message": f"Chat session for user {user_id} cleared."})
     else:
         return jsonify({"message": f"No chat session found for user {user_id}."})
 
+
 def keep_alive():
-    print("Waiting 5 minutes before starting keep-alive pings...")
     time.sleep(300)
-    print("Starting keep-alive pings.")
     url = "https://web-production-d4e5.up.railway.app/"
     while True:
         try:
