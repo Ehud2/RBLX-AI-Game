@@ -141,15 +141,16 @@ generation_config = {
 
 chat_sessions = {}
 request_queue = queue.Queue()
+response_cache = {}  # To store responses that are being processed
 lock = threading.Lock()
 last_request_times = []
 
-# Maximum number of retries for a request
+# Configuration
 MAX_RETRIES = 10
-# Initial backoff time in seconds
 INITIAL_BACKOFF = 2
-# Maximum backoff time in seconds
 MAX_BACKOFF = 60
+REQUEST_TIMEOUT = 25  # Timeout for HTTP request (in seconds)
+QUEUE_TIMEOUT = 28    # Timeout for queue.get (slightly longer than REQUEST_TIMEOUT)
 
 
 def get_chat_session(user_id, model_name):
@@ -164,37 +165,51 @@ def get_chat_session(user_id, model_name):
     return chat_sessions[user_id]
 
 
-def send_message_with_retry(chat_session, user_input):
+def send_message_with_retry(user_id, chat_session, user_input, request_id):
     retries = 0
     backoff = INITIAL_BACKOFF
     
     while retries < MAX_RETRIES:
         try:
+            # Check if we should cancel this operation
+            if response_cache.get(request_id) == "CANCELLED":
+                print(f"Request {request_id} was cancelled")
+                return "Your request was cancelled due to timeout. Please try again."
+                
             response = chat_session.send_message(user_input)
             return response.text
         except Exception as e:
             print(f"Error occurred: {str(e)}")
             retries += 1
             
+            # Check if request is cancelled before waiting
+            if response_cache.get(request_id) == "CANCELLED":
+                print(f"Request {request_id} was cancelled during retry")
+                return "Your request was cancelled due to timeout. Please try again."
+            
             if retries >= MAX_RETRIES:
-                # If we've exhausted retries, return a friendly message instead of the error
-                return "I'm sorry, I'm having trouble processing your request at the moment. Please try again later."
+                return "I'm sorry, I'm having trouble processing your request right now. Please try again in a few minutes."
             
             # Add some randomness to the backoff to prevent all retries happening at the same time
             jitter = random.uniform(0, 0.1 * backoff)
             sleep_time = backoff + jitter
             
             print(f"Retrying in {sleep_time:.2f} seconds (attempt {retries} of {MAX_RETRIES})...")
-            time.sleep(sleep_time)
+            
+            # Sleep in smaller increments so we can check for cancellation
+            start_time = time.time()
+            while time.time() - start_time < sleep_time:
+                if response_cache.get(request_id) == "CANCELLED":
+                    print(f"Request {request_id} was cancelled during backoff")
+                    return "Your request was cancelled due to timeout. Please try again."
+                time.sleep(0.5)  # Check every half second
             
             # Exponential backoff with cap
             backoff = min(backoff * 2, MAX_BACKOFF)
 
 
-def process_queue():
-    while True:
-        user_id, user_input, response_queue = request_queue.get()
-        
+def process_request(user_id, user_input, request_id):
+    try:
         with lock:
             # Managing request rate
             global last_request_times
@@ -208,17 +223,34 @@ def process_queue():
             
             last_request_times.append(now)
         
+        chat_session = get_chat_session(user_id, model_name)
+        response = send_message_with_retry(user_id, chat_session, user_input, request_id)
+        
+        # Store the response in the cache if request hasn't been cancelled
+        if response_cache.get(request_id) != "CANCELLED":
+            response_cache[request_id] = response
+        
+    except Exception as e:
+        error_message = "I'm sorry, I couldn't process your request. Please try again later."
+        print(f"Unhandled error: {str(e)}")
+        response_cache[request_id] = error_message
+
+
+def process_queue():
+    while True:
         try:
-            chat_session = get_chat_session(user_id, model_name)
-            response = send_message_with_retry(chat_session, user_input)
-            response_queue.put(response)
+            user_id, user_input, request_id = request_queue.get()
+            # Process each request in a new thread to avoid blocking
+            threading.Thread(
+                target=process_request, 
+                args=(user_id, user_input, request_id),
+                daemon=True
+            ).start()
         except Exception as e:
-            # Even here, don't return the error directly
-            error_message = "I'm sorry, I couldn't process your request. Please try again later."
-            print(f"Unhandled error: {str(e)}")
-            response_queue.put(error_message)
+            print(f"Error in queue processing: {str(e)}")
 
 
+# Start the queue processing thread
 threading.Thread(target=process_queue, daemon=True).start()
 
 
@@ -233,11 +265,34 @@ def generate():
     if not user_input:
         return jsonify({"error": "Missing input"}), 400
     
-    response_queue = queue.Queue()
-    request_queue.put((user_id, user_input, response_queue))
-    response = response_queue.get()
+    # Generate a unique request ID
+    request_id = f"{user_id}_{time.time()}_{random.randint(1000, 9999)}"
     
-    return jsonify({"response": response})
+    # Initialize the request in the cache
+    response_cache[request_id] = "PENDING"
+    
+    # Add to processing queue
+    request_queue.put((user_id, user_input, request_id))
+    
+    # Wait for response with timeout
+    start_time = time.time()
+    while time.time() - start_time < QUEUE_TIMEOUT:
+        response = response_cache.get(request_id)
+        
+        if response and response != "PENDING":
+            # Clean up the cache entry
+            del response_cache[request_id]
+            return jsonify({"response": response})
+        
+        time.sleep(0.1)  # Small sleep to prevent CPU hogging
+    
+    # If we reach here, the request timed out
+    response_cache[request_id] = "CANCELLED"
+    
+    # Return a friendly timeout message
+    return jsonify({
+        "response": "I'm taking longer than expected to process your request. Please try again in a moment."
+    })
 
 
 @app.route('/clear_chat', methods=['POST'])
@@ -266,7 +321,38 @@ def keep_alive():
             print(f"⚠️ Ping failed: {e}")
         time.sleep(600)
 
+
+# Clean up old entries in the response cache
+def clean_response_cache():
+    while True:
+        try:
+            current_time = time.time()
+            keys_to_remove = []
+            
+            for key, value in response_cache.items():
+                if "_" in key:
+                    # Extract timestamp from request_id
+                    try:
+                        parts = key.split("_")
+                        if len(parts) >= 2:
+                            timestamp = float(parts[1])
+                            # Remove entries older than 5 minutes
+                            if current_time - timestamp > 300:
+                                keys_to_remove.append(key)
+                    except (ValueError, IndexError):
+                        pass
+            
+            for key in keys_to_remove:
+                response_cache.pop(key, None)
+                
+        except Exception as e:
+            print(f"Error cleaning response cache: {e}")
+            
+        time.sleep(60)  # Run cleanup every minute
+
+
 threading.Thread(target=keep_alive, daemon=True).start()
+threading.Thread(target=clean_response_cache, daemon=True).start()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
