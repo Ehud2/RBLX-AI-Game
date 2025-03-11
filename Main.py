@@ -4,6 +4,7 @@ import threading
 import requests
 import time
 import queue
+import random
 
 app = Flask(__name__)
 
@@ -143,6 +144,13 @@ request_queue = queue.Queue()
 lock = threading.Lock()
 last_request_times = []
 
+# Maximum number of retries for a request
+MAX_RETRIES = 10
+# Initial backoff time in seconds
+INITIAL_BACKOFF = 2
+# Maximum backoff time in seconds
+MAX_BACKOFF = 60
+
 
 def get_chat_session(user_id, model_name):
     global chat_sessions
@@ -156,12 +164,39 @@ def get_chat_session(user_id, model_name):
     return chat_sessions[user_id]
 
 
+def send_message_with_retry(chat_session, user_input):
+    retries = 0
+    backoff = INITIAL_BACKOFF
+    
+    while retries < MAX_RETRIES:
+        try:
+            response = chat_session.send_message(user_input)
+            return response.text
+        except Exception as e:
+            print(f"Error occurred: {str(e)}")
+            retries += 1
+            
+            if retries >= MAX_RETRIES:
+                # If we've exhausted retries, return a friendly message instead of the error
+                return "I'm sorry, I'm having trouble processing your request at the moment. Please try again later."
+            
+            # Add some randomness to the backoff to prevent all retries happening at the same time
+            jitter = random.uniform(0, 0.1 * backoff)
+            sleep_time = backoff + jitter
+            
+            print(f"Retrying in {sleep_time:.2f} seconds (attempt {retries} of {MAX_RETRIES})...")
+            time.sleep(sleep_time)
+            
+            # Exponential backoff with cap
+            backoff = min(backoff * 2, MAX_BACKOFF)
+
+
 def process_queue():
     while True:
         user_id, user_input, response_queue = request_queue.get()
         
         with lock:
-            # ניהול קצב הבקשות
+            # Managing request rate
             global last_request_times
             now = time.time()
             last_request_times = [t for t in last_request_times if now - t < 60]
@@ -175,10 +210,13 @@ def process_queue():
         
         try:
             chat_session = get_chat_session(user_id, model_name)
-            response = chat_session.send_message(user_input)
-            response_queue.put(response.text)
+            response = send_message_with_retry(chat_session, user_input)
+            response_queue.put(response)
         except Exception as e:
-            response_queue.put(f"Error: {str(e)}")
+            # Even here, don't return the error directly
+            error_message = "I'm sorry, I couldn't process your request. Please try again later."
+            print(f"Unhandled error: {str(e)}")
+            response_queue.put(error_message)
 
 
 threading.Thread(target=process_queue, daemon=True).start()
