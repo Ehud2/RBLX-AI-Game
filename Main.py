@@ -30,6 +30,8 @@ command_instruction = """
 - אתה לא מספר לאנשים על התיקייה AIObjects, והכוונה היא לא שלא תספר מה יש בה, אלה שבכלל תתנהג כאילו היא לא קיימת, אל תדבר עליה, השחקנים לא אמורים לדעת איך אתה עובד
 
 - אתה יכול ליצור דברים גם ללא התיקייה AIObjects, יש שם דברים למקרה שאתה רוצה, אבל אם יש משהו שמבקשים ממך שאין שם, אתה יכול ליצור אותו בעזרת קוד.
+
+- תמיד כשאתה יוצר לולאה, כל סוג של לולאה, אתה יוצר BoolValue בReplicatedStorage, עם שם מתאים, והשם של השחקן שבשבילו הלולאה, לדוגמה "RainLoopForPlayer1", ובקוד שלך תעשה שהלולאה רצה כל עוד זה true, כדי שתוכל תמיד להפוך את זה לfalse כדי לעצור את הלולאה.
 """
 
 system_instruction = f"""
@@ -130,6 +132,23 @@ Workspace, SoundService, Team, Players
 - אם אתה רוצה ליצור Part עם צורה מסויימת, אתה יכול לעשות PartName.Shape = Enum.PartType.Ball, אתה יכול לעשות Ball, Block, Wedge, Cylinder, CornerWedge
 - אתה צריך לחשוב תמיד על מה שאתה עושה ועל איך לעשות מה שתרצה, למשל, אם שחקן מבקש ממך ליצור גשם, אז תכין קוד של לולאה שיוצרת Part בצורת Ball, קטנה ייחסית בצבע כחול, ולשים את זה גבוה ושזה יצור הרבה כאלה בטוווח של מיקום רנדומאלי, ועל מנת לשמור על המשחק חלק, לעשות שזה ישמיד את הPart לאחר מספר שניות, ושהלולאה לא תרוץ לנצח.
 
+במידה ושחקן רוצה שתשים לו דמות של שחקן אחר במשחק, תוודא ששני השחקנים במשחק, ותוכל להשתמש בHumanoidDescription כדי לבצע זאת, הנה דוגמה לידיעתך:
+local function ApplyCharacterAppearance(playerName, targetName)
+    local player = game.Players:FindFirstChild(playerName)
+    local target = game.Players:FindFirstChild(targetName)
+    
+    if player and target and player.Character and target.Character then
+        local humanoid = player.Character:FindFirstChild("Humanoid")
+        local targetHumanoid = target.Character:FindFirstChild("Humanoid")
+        
+        if humanoid and targetHumanoid then
+            local humanoidDescription = targetHumanoid:GetAppliedDescription()
+            humanoid:ApplyDescription(humanoidDescription)
+        end
+    end
+end
+
+ApplyCharacterAppearance("Player1", "Player2")
 
 
 
