@@ -229,6 +229,7 @@ else
     warn("Model 'Noob' לא נמצא בתוך ServerStorage או שאין לו Humanoid")
 end
 ```
+It is very important that you do not accidentally make everyone who enters the game have a specific character using the code.
 
 To load the requested character into the player, note: you will not attempt to load a Character into the player that you do not see exists in the folder.
 
