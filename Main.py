@@ -155,103 +155,76 @@ And with each request you also get a list of all the Characters in the "Characte
 ```code
 local Players = game:GetService("Players")
 local ServerStorage = game:GetService("ServerStorage")
-
 local NoobCharacter = ServerStorage:WaitForChild("Characters"):FindFirstChild("Noob")
-local Target_Player = "" -- כאן כמובן לשים את השם של השחקן
+local Target_Player = "" -- כאן את שם השחקן
+
+local function ApplyCharacterAppearance(character, hackerDescription)
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        humanoid:ApplyDescription(hackerDescription)
+        
+        for _, item in ipairs(character:GetChildren()) do
+            if item:IsA("Shirt") or item:IsA("Pants") or item:IsA("Hat") or item:IsA("Accessory") or 
+               (item:IsA("MeshPart") and item.Name ~= "HumanoidRootPart" and item.Name ~= "Head" and 
+                not string.match(item.Name, "Torso") and not string.match(item.Name, "Arm") and 
+                not string.match(item.Name, "Leg") and not string.match(item.Name, "Hand") and 
+                not string.match(item.Name, "Foot")) then
+                item:Destroy()
+            end
+        end
+        
+        local noobShirt = NoobCharacter:FindFirstChildOfClass("Shirt")
+        local noobPants = NoobCharacter:FindFirstChildOfClass("Pants")
+        
+        if noobShirt then
+            noobShirt:Clone().Parent = character
+        end
+        
+        if noobPants then
+            noobPants:Clone().Parent = character
+        end
+        
+        for _, hat in ipairs(NoobCharacter:GetChildren()) do
+            if hat:IsA("Hat") then
+                hat:Clone().Parent = character
+            end
+        end
+        
+        for _, accessory in ipairs(NoobCharacter:GetChildren()) do
+            if accessory:IsA("Accessory") then
+                accessory:Clone().Parent = character
+            end
+        end
+        
+        for _, meshPart in ipairs(NoobCharacter:GetChildren()) do
+            if meshPart:IsA("MeshPart") and meshPart.Name ~= "HumanoidRootPart" and meshPart.Name ~= "Head" and 
+               not string.match(meshPart.Name, "Torso") and not string.match(meshPart.Name, "Arm") and 
+               not string.match(meshPart.Name, "Leg") and not string.match(meshPart.Name, "Hand") and 
+               not string.match(meshPart.Name, "Foot") then
+                meshPart:Clone().Parent = character
+            end
+        end
+    end
+end
 
 if NoobCharacter and NoobCharacter:FindFirstChildOfClass("Humanoid") then
-	local hackerHumanoid = NoobCharacter:FindFirstChildOfClass("Humanoid")
-	local hackerDescription = hackerHumanoid:GetAppliedDescription()
-	
-	local targetPlayer = Players:FindFirstChild(Target_Player)
-	if targetPlayer and targetPlayer.Character then
-		local character = targetPlayer.Character
-		local humanoid = character:FindFirstChildOfClass("Humanoid")
-		if humanoid then
-			humanoid:ApplyDescription(hackerDescription)
-
-            -- מחיקת כל הפריטים הרלוונטיים מהדמות
-            for _, item in ipairs(character:GetChildren()) do
-                if item:IsA("Shirt") or item:IsA("Pants") or item:IsA("Hat") or item:IsA("Accessory") then
-                    item:Destroy()
-                end
-            end
-
-			-- העתקת חולצה ומכנסיים
-			local noobShirt = NoobCharacter:FindFirstChildOfClass("Shirt")
-			local noobPants = NoobCharacter:FindFirstChildOfClass("Pants")
-
-			if noobShirt then
-				noobShirt:Clone().Parent = character
-			end
-
-			if noobPants then
-				noobPants:Clone().Parent = character
-			end
-            
-            -- העתקת כובעים (Hat)
-            for _, hat in ipairs(NoobCharacter:GetChildren()) do
-                if hat:IsA("Hat") then
-                    hat:Clone().Parent = character
-                end
-            end
-
-			-- העתקת אביזרים
-			for _, accessory in ipairs(NoobCharacter:GetChildren()) do
-				if accessory:IsA("Accessory") then
-					accessory:Clone().Parent = character
-				end
-			end
-		end
-	end
-	
-	-- חיבור לאירוע של שחקן חדש
-	Players.PlayerAdded:Connect(function(player)
-		if player.Name == Target_Player then
-			-- חיבור לאירוע כאשר הדמות נטענת
-			player.CharacterAdded:Connect(function(character)
-				local humanoid = character:FindFirstChildOfClass("Humanoid")
-				if humanoid then
-					humanoid:ApplyDescription(hackerDescription)
-
-                    -- מחיקת כל הפריטים הרלוונטיים מהדמות
-                    for _, item in ipairs(character:GetChildren()) do
-                        if item:IsA("Shirt") or item:IsA("Pants") or item:IsA("Hat") or item:IsA("Accessory") then
-                            item:Destroy()
-                        end
-                    end
-
-					-- העתקת חולצה ומכנסיים
-					local noobShirt = NoobCharacter:FindFirstChildOfClass("Shirt")
-					local noobPants = NoobCharacter:FindFirstChildOfClass("Pants")
-
-					if noobShirt then
-						noobShirt:Clone().Parent = character
-					end
-
-					if noobPants then
-						noobPants:Clone().Parent = character
-					end
-                    
-                    -- העתקת כובעים (Hat)
-                    for _, hat in ipairs(NoobCharacter:GetChildren()) do
-                        if hat:IsA("Hat") then
-                            hat:Clone().Parent = character
-                        end
-                    end
-
-					-- העתקת אביזרים
-					for _, accessory in ipairs(NoobCharacter:GetChildren()) do
-						if accessory:IsA("Accessory") then
-							accessory:Clone().Parent = character
-						end
-					end
-				end
-			end)
-		end
-	end)
+    local hackerHumanoid = NoobCharacter:FindFirstChildOfClass("Humanoid")
+    local hackerDescription = hackerHumanoid:GetAppliedDescription()
+    
+    local targetPlayer = Players:FindFirstChild(Target_Player)
+    if targetPlayer and targetPlayer.Character then
+        ApplyCharacterAppearance(targetPlayer.Character, hackerDescription)
+    end
+    
+    Players.PlayerAdded:Connect(function(player)
+        if player.Name == Target_Player then
+            player.CharacterAdded:Connect(function(character)
+                ApplyCharacterAppearance(character, hackerDescription)
+            end)
+        end
+    end)
 else
-	warn("Model 'Noob' לא נמצא בתוך ServerStorage או שאין לו Humanoid")
+    warn("Model 'Noob' לא נמצא בתוך ServerStorage או שאין לו Humanoid")
 end
 ```
 
