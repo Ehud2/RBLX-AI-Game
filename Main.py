@@ -165,9 +165,43 @@ if NoobCharacter and NoobCharacter:FindFirstChildOfClass("Humanoid") then
 	
 	local targetPlayer = Players:FindFirstChild(Target_Player)
 	if targetPlayer and targetPlayer.Character then
-		local humanoid = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
+		local character = targetPlayer.Character
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
 		if humanoid then
 			humanoid:ApplyDescription(hackerDescription)
+
+            -- מחיקת כל הפריטים הרלוונטיים מהדמות
+            for _, item in ipairs(character:GetChildren()) do
+                if item:IsA("Shirt") or item:IsA("Pants") or item:IsA("Hat") or item:IsA("Accessory") then
+                    item:Destroy()
+                end
+            end
+
+			-- העתקת חולצה ומכנסיים
+			local noobShirt = NoobCharacter:FindFirstChildOfClass("Shirt")
+			local noobPants = NoobCharacter:FindFirstChildOfClass("Pants")
+
+			if noobShirt then
+				noobShirt:Clone().Parent = character
+			end
+
+			if noobPants then
+				noobPants:Clone().Parent = character
+			end
+            
+            -- העתקת כובעים (Hat)
+            for _, hat in ipairs(NoobCharacter:GetChildren()) do
+                if hat:IsA("Hat") then
+                    hat:Clone().Parent = character
+                end
+            end
+
+			-- העתקת אביזרים
+			for _, accessory in ipairs(NoobCharacter:GetChildren()) do
+				if accessory:IsA("Accessory") then
+					accessory:Clone().Parent = character
+				end
+			end
 		end
 	end
 	
@@ -179,6 +213,39 @@ if NoobCharacter and NoobCharacter:FindFirstChildOfClass("Humanoid") then
 				local humanoid = character:FindFirstChildOfClass("Humanoid")
 				if humanoid then
 					humanoid:ApplyDescription(hackerDescription)
+
+                    -- מחיקת כל הפריטים הרלוונטיים מהדמות
+                    for _, item in ipairs(character:GetChildren()) do
+                        if item:IsA("Shirt") or item:IsA("Pants") or item:IsA("Hat") or item:IsA("Accessory") then
+                            item:Destroy()
+                        end
+                    end
+
+					-- העתקת חולצה ומכנסיים
+					local noobShirt = NoobCharacter:FindFirstChildOfClass("Shirt")
+					local noobPants = NoobCharacter:FindFirstChildOfClass("Pants")
+
+					if noobShirt then
+						noobShirt:Clone().Parent = character
+					end
+
+					if noobPants then
+						noobPants:Clone().Parent = character
+					end
+                    
+                    -- העתקת כובעים (Hat)
+                    for _, hat in ipairs(NoobCharacter:GetChildren()) do
+                        if hat:IsA("Hat") then
+                            hat:Clone().Parent = character
+                        end
+                    end
+
+					-- העתקת אביזרים
+					for _, accessory in ipairs(NoobCharacter:GetChildren()) do
+						if accessory:IsA("Accessory") then
+							accessory:Clone().Parent = character
+						end
+					end
 				end
 			end)
 		end
