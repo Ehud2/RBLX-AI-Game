@@ -157,15 +157,25 @@ local Players = game:GetService("Players")
 local ServerStorage = game:GetService("ServerStorage")
 
 local NoobCharacter = ServerStorage:WaitForChild("Characters"):FindFirstChild("Noob")
-local Target_Player = ""
+local Target_Player = "" -- כאן כמובן לשים את השם של השחקן
 
 if NoobCharacter and NoobCharacter:FindFirstChildOfClass("Humanoid") then
 	local hackerHumanoid = NoobCharacter:FindFirstChildOfClass("Humanoid")
 	local hackerDescription = hackerHumanoid:GetAppliedDescription()
-
+	
+	local targetPlayer = Players:FindFirstChild(Target_Player)
+	if targetPlayer and targetPlayer.Character then
+		local humanoid = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			humanoid:ApplyDescription(hackerDescription)
+		end
+	end
+	
+	-- חיבור לאירוע של שחקן חדש
 	Players.PlayerAdded:Connect(function(player)
 		if player.Name == Target_Player then
-			player.CharacterAppearanceLoaded:Connect(function(character)
+			-- חיבור לאירוע כאשר הדמות נטענת
+			player.CharacterAdded:Connect(function(character)
 				local humanoid = character:FindFirstChildOfClass("Humanoid")
 				if humanoid then
 					humanoid:ApplyDescription(hackerDescription)
