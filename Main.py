@@ -355,21 +355,8 @@ def send_message_with_retry(user_id, chat_session, user_input, request_id):
             # Exponential backoff with cap
             backoff = min(backoff * 2, MAX_BACKOFF)
 
-def process_request(user_id, user_input, request_id):
+def process_request(user_id, user_input, request_id, model_name):
     try:
-        with lock:
-            # Managing request rate
-            global last_request_times
-            now = time.time()
-            last_request_times = [t for t in last_request_times if now - t < 60]
-            
-            if len(last_request_times) >= 15:
-                 model_name = "gemini-2.0-flash-lite"
-             else:
-                 model_name = "gemini-2.0-flash"
-            
-            last_request_times.append(now)
-        
         chat_session = get_chat_session(user_id, model_name)
         response = send_message_with_retry(user_id, chat_session, user_input, request_id)
         
@@ -385,11 +372,28 @@ def process_request(user_id, user_input, request_id):
 def process_queue():
     while True:
         try:
-            user_id, user_input, request_id = request_queue.get()
+            user_id, user_input, request_id, endpoint = request_queue.get()
+
+            if endpoint == "/newmodel_generate":
+                model_name = "gemini-2.5-pro-exp-03-25"
+            else:  # Assuming it's for /generate
+                with lock:
+                    # Managing request rate
+                    global last_request_times
+                    now = time.time()
+                    last_request_times = [t for t in last_request_times if now - t < 60]
+
+                    if len(last_request_times) >= 15:
+                        model_name = "gemini-2.0-flash-lite"
+                    else:
+                        model_name = "gemini-2.0-flash"
+
+                    last_request_times.append(now)
+                    
             # Process each request in a new thread to avoid blocking
             threading.Thread(
                 target=process_request, 
-                args=(user_id, user_input, request_id),
+                args=(user_id, user_input, request_id, model_name),
                 daemon=True
             ).start()
         except Exception as e:
@@ -416,7 +420,7 @@ def generate():
     response_cache[request_id] = "PENDING"
     
     # Add to processing queue
-    request_queue.put((user_id, user_input, request_id))
+    request_queue.put((user_id, user_input, request_id, "/generate"))
     
     # Wait for response with timeout
     start_time = time.time()
@@ -437,6 +441,47 @@ def generate():
     return jsonify({
         "response": "I'm taking longer than expected to process your request. Please try again in a moment."
     })
+
+@app.route('/newmodel_generate', methods=['POST'])
+def newmodel_generate():
+    data = request.get_json()
+    user_id = data.get("userId")
+    user_input = data.get("input", "")
+    if not user_id:
+        return jsonify({"error": "Missing user ID"}), 400
+
+    if not user_input:
+        return jsonify({"error": "Missing input"}), 400
+    
+    # Generate a unique request ID
+    request_id = f"{user_id}_{time.time()}_{random.randint(1000, 9999)}"
+    
+    # Initialize the request in the cache
+    response_cache[request_id] = "PENDING"
+    
+    # Add to processing queue
+    request_queue.put((user_id, user_input, request_id, "/newmodel_generate"))
+    
+    # Wait for response with timeout
+    start_time = time.time()
+    while time.time() - start_time < QUEUE_TIMEOUT:
+        response = response_cache.get(request_id)
+        
+        if response and response != "PENDING":
+            # Clean up the cache entry
+            del response_cache[request_id]
+            return jsonify({"response": response})
+        
+        time.sleep(0.1)  # Small sleep to prevent CPU hogging
+    
+    # If we reach here, the request timed out
+    response_cache[request_id] = "CANCELLED"
+    
+    # Return a friendly timeout message
+    return jsonify({
+        "response": "I'm taking longer than expected to process your request. Please try again in a moment."
+    })
+
 
 @app.route('/clear_chat', methods=['POST'])
 def clear_chat():
