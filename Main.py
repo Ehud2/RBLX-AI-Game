@@ -364,9 +364,9 @@ def process_request(user_id, user_input, request_id):
             last_request_times = [t for t in last_request_times if now - t < 60]
             
             if len(last_request_times) >= 15:
-                model_name = "gemini-2.0-flash-lite"
+                model_name = "gemini-2.5-pro-exp-03-25"
             else:
-                model_name = "gemini-2.0-flash"
+                model_name = "gemini-2.5-pro-exp-03-25"
             
             last_request_times.append(now)
         
