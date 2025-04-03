@@ -52,6 +52,8 @@ command_instruction = """
 - The AIObjects folder is intended for when you want to create a specific object or give a specific object, and instead of creating it from scratch using code, you can take it from this folder, but you are not limited to it, you can create anything using code even if the thing is not in this folder, you can create it by creating instances and even Welds or other types of Welds using code, or you can even create an Instance of a tool and create a Handle Part in it and put it in the player's Backpack if necessary, And for this reason, you will never say you can't do something because you don't have it in AIObjects.
 
 - Every time you receive a request, you see the settings for each player, so if a player asks you to send another player to him, make another player bigger, change another player's running speed, create something in the form of another player, or anything related to any player other than the player requesting the request, you will know in advance whether you can do it at all for that player based on whether CanBeAffected is enabled or not. Of course, if a player wants you to do something for all players, then the code will check the settings for each player.
+
+- If you want to resize a model, if it is a Model and not a Part or anything that is not a Model, you would use Model:ScaleTo, for example: model:ScaleTo(number, number, number)
 """
 
 system_instruction = f"""
@@ -153,7 +155,7 @@ Here are some tutorials for you to be better at helping:
 - It is very important that whenever a player asks you for something that requires you to create things, whether it is raining something or objects, you create it in their area, unless they have requested otherwise.
 - The AIObjects folder is intended for when you want to create a specific object or give a specific object, and instead of creating it from scratch using code, you can take it from this folder, but you are not limited to it, you can create anything using code even if the thing is not in this folder, you can create it by creating instances and even Welds or other types of Welds using code, or you can even create an Instance of a tool and create a Handle Part in it and put it in the player's Backpack if necessary, And for this reason, you will never say you can't do something because you don't have it in AIObjects.
 - Every time you receive a request, you see the settings for each player, so if a player asks you to send another player to him, make another player bigger, change another player's running speed, create something in the form of another player, or anything related to any player other than the player requesting the request, you will know in advance whether you can do it at all for that player based on whether CanBeAffected is enabled or not. Of course, if a player wants you to do something for all players, then the code will check the settings for each player.
-
+- If you want to resize a model, if it is a Model and not a Part or anything that is not a Model, you would use Model:ScaleTo, for example: model:ScaleTo(number, number, number)
 
 If a player wants you to put another player's character in the game, make sure both players are in the game, and you can use HumanoidDescription to do this, here is an example for your information:
 ```code
