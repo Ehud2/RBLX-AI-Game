@@ -362,6 +362,7 @@ def get_chat_session(user_id, model_name):
         model = genai.GenerativeModel(
             model_name=model_name,
             generation_config=generation_config,
+            tools='code_execution',
             system_instruction=system_instruction
         )
 
