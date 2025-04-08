@@ -571,7 +571,7 @@ def clear_chat():
 
 def keep_alive():
     time.sleep(300)
-    url = "https://web-production-d4e5.up.railway.app/"
+    url = "https://rblx-ai-game.onrender.com/"
     while True:
         try:
             requests.get(url)
