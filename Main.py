@@ -496,7 +496,7 @@ def process_queue():
                     last_newmodel_request_times = [t for t in last_newmodel_request_times if now - t < 60]
 
                     if len(last_newmodel_request_times) >= 10:
-                        model_name = "gemini-2.0-flash-thinking-exp-01-21"
+                        model_name = "gemini-2.5-flash-preview-04-17"
                     else:
                         model_name = "gemini-2.5-pro-exp-03-25"
 
@@ -510,9 +510,9 @@ def process_queue():
                     last_request_times = [t for t in last_request_times if now - t < 60]
 
                     if len(last_request_times) >= 15:
-                        model_name = "gemini-2.5-flash-preview-04-17"
+                        model_name = "gemini-2.0-flash-lite"
                     else:
-                        model_name = "gemini-2.5-flash-preview-04-17"
+                        model_name = "gemini-2.0-flash"
 
                     last_request_times.append(now)
                     
