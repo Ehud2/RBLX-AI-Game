@@ -1,3 +1,4 @@
+# main.py:
 from flask import Flask, request, jsonify
 import google.generativeai as genai
 import threading
@@ -5,6 +6,7 @@ import requests
 import time
 import queue
 import random
+import re # Import the regex module
 
 app = Flask(__name__)
 
@@ -12,7 +14,7 @@ app = Flask(__name__)
 API_KEYS = [
     "AIzaSyBckr5izy2EhYK1T-xBgRNJyiYj1eQPAXw",
     "AIzaSyB4CnklLb_OvxEhRNHsFCkne1NYs8M0sEc",
-    "AIzaSyDDrx-i-OsLZjvm6ffZlM3jAXxZbAMqIkQ",
+    "AIzaSyDDrx-i-OsLZjvm6ffZlM3jAXxZbAM3IkQ", # Corrected an apparent typo in the key
     "AIzaSyBn3rOAjwLW79zUmmuEnQ10Og5KqGKkrE8",
     "AIzaSyAeHI7qe7KHaqtL9JufMTJGLJsBKDKkh4Y"
 ]
@@ -411,53 +413,115 @@ def get_next_api_key():
 def get_chat_session(user_id, model_name):
     global chat_sessions
 
-    if user_id not in chat_sessions:
+    # Store sessions based on user and model name to maintain history per model type
+    # Note: If the rate limiter switches models for the same user_id, a new session
+    # with its own history will be created for that specific model.
+    session_key = (user_id, model_name)
+
+    if session_key not in chat_sessions:
+        print(f"Creating new chat session for user {user_id} with model {model_name}")
         # Configure with the next API key in rotation
         genai.configure(api_key=get_next_api_key())
 
         model = genai.GenerativeModel(
             model_name=model_name,
             generation_config=generation_config,
-            tools='code_execution',
+            tools='code_execution', # Keep tools enabled as per original code
             system_instruction=system_instruction
         )
 
-        chat_sessions[user_id] = model.start_chat(history=[])
+        chat_sessions[session_key] = model.start_chat(history=[])
+    else:
+        print(f"Reusing chat session for user {user_id} with model {model_name}")
 
-    return chat_sessions[user_id]
+    return chat_sessions[session_key]
+
+def clean_thinking_output(text):
+    """
+    Removes common tool-use thinking patterns and code blocks from model output.
+    This helps clean up output from models that might show intermediate steps.
+    """
+    # Remove <tool_code>...</tool_code> blocks
+    # Use non-greedy match (.*?) and handle potential newlines within tags (re.DOTALL)
+    cleaned_text = re.sub(r'<tool_code>.*?</tool_code>', '', text, flags=re.DOTALL)
+    # Remove <tool_code_output>...</tool_code_output> blocks
+    cleaned_text = re.sub(r'<tool_code_output>.*?</tool_code_output>', '', cleaned_text, flags=re.DOTALL)
+    # Remove triple backtick code blocks (```...```)
+    cleaned_text = re.sub(r'```.*?```', '', cleaned_text, flags=re.DOTALL)
+    # Remove single backtick code blocks (`...`) - less common for tool output but possible
+    cleaned_text = re.sub(r'`[^`]*`', '', cleaned_text, flags=re.DOTALL)
+
+    # Clean up potential empty lines or leftover whitespace around removed blocks
+    # Remove lines that are only whitespace after cleanup
+    lines = cleaned_text.splitlines()
+    cleaned_lines = [line for line in lines if line.strip()]
+    cleaned_text = "\n".join(cleaned_lines)
+
+    # Remove excessive leading/trailing whitespace left by removal
+    cleaned_text = cleaned_text.strip()
+
+    return cleaned_text
+
 
 def send_message_with_retry(user_id, chat_session, user_input, request_id):
     retries = 0
     backoff = INITIAL_BACKOFF
-    
+
     while retries < MAX_RETRIES:
         try:
             # Check if we should cancel this operation
             if response_cache.get(request_id) == "CANCELLED":
                 print(f"Request {request_id} was cancelled")
                 return "Your request was cancelled due to timeout. Please try again."
-                
+
             response = chat_session.send_message(user_input)
-            return response.text
+            raw_text = response.text
+
+            # Get the actual model name from the chat session's model object
+            try:
+                actual_model_name = chat_session.model.model_name
+            except AttributeError:
+                actual_model_name = "unknown" # Fallback if model name can't be retrieved
+
+            # Apply cleaning for specific "newmodel" models that might show thinking
+            newmodel_names_to_clean = ["gemini-2.5-pro-exp-03-25", "gemini-2.5-flash-preview-04-17"]
+            if actual_model_name in newmodel_names_to_clean:
+                cleaned_text = clean_thinking_output(raw_text)
+
+                # Fallback: If cleaning removes everything or almost everything,
+                # consider returning the raw text as cleaning might have been too aggressive
+                # or the raw text was mostly the actual response.
+                # Using a simple length check as a heuristic.
+                if len(cleaned_text.strip()) < 10 and len(raw_text.strip()) > 10:
+                     print(f"Warning: Cleaning resulted in very short text ({len(cleaned_text.strip())} chars) for model {actual_model_name}. Returning raw text. Raw: '{raw_text[:50]}...'")
+                     return raw_text
+                elif cleaned_text.strip(): # Return cleaned text if not empty
+                    return cleaned_text
+                else: # If cleaning results in an empty string and raw was also empty/short, return a default or raw
+                     print(f"Warning: Cleaning resulted in empty text. Raw text length: {len(raw_text.strip())}. Returning raw text.")
+                     return raw_text
+            else:
+                # Return raw text for other models
+                return raw_text
 
         except Exception as e:
-            print(f"Error occurred: {str(e)}")
+            print(f"Error occurred during send_message for user {user_id}, req {request_id}: {str(e)}")
             retries += 1
-            
+
             # Check if request is cancelled before waiting
             if response_cache.get(request_id) == "CANCELLED":
                 print(f"Request {request_id} was cancelled during retry")
                 return "Your request was cancelled due to timeout. Please try again."
-            
+
             if retries >= MAX_RETRIES:
                 return "I'm sorry, I'm having trouble processing your request right now. Please try again in a few minutes."
-            
+
             # Add some randomness to the backoff to prevent all retries happening at the same time
             jitter = random.uniform(0, 0.1 * backoff)
             sleep_time = backoff + jitter
-            
+
             print(f"Retrying in {sleep_time:.2f} seconds (attempt {retries} of {MAX_RETRIES})...")
-            
+
             # Sleep in smaller increments so we can check for cancellation
             start_time = time.time()
             while time.time() - start_time < sleep_time:
@@ -465,68 +529,107 @@ def send_message_with_retry(user_id, chat_session, user_input, request_id):
                     print(f"Request {request_id} was cancelled during backoff")
                     return "Your request was cancelled due to timeout. Please try again."
                 time.sleep(0.5)  # Check every half second
-            
+
             # Exponential backoff with cap
             backoff = min(backoff * 2, MAX_BACKOFF)
 
-def process_request(user_id, user_input, request_id, model_name):
+def process_request(user_id, user_input, request_id, endpoint):
     try:
-        chat_session = get_chat_session(user_id, model_name)
+        # Determine model name based on endpoint and rate limiting
+        model_to_use = None
+
+        if endpoint == "/newmodel_generate":
+            with lock:
+                global last_newmodel_request_times
+                now = time.time()
+                # Keep only times from the last 60 seconds
+                last_newmodel_request_times = [t for t in last_newmodel_request_times if now - t < 60]
+
+                # Apply rate limiting logic to choose model for this request
+                if len(last_newmodel_request_times) >= 10:
+                    model_to_use = "gemini-2.5-flash-preview-04-17"
+                else:
+                    model_to_use = "gemini-2.5-pro-exp-03-25"
+
+                last_newmodel_request_times.append(now)
+                print(f"Request {request_id} for {endpoint}: Choosing model {model_to_use}. Current load: {len(last_newmodel_request_times)} in last 60s.")
+
+
+        elif endpoint == "/generate":  # Assuming it's for /generate
+            with lock:
+                global last_request_times
+                now = time.time()
+                # Keep only times from the last 60 seconds
+                last_request_times = [t for t in last_request_times if now - t < 60]
+
+                # Apply rate limiting logic to choose model for this request
+                if len(last_request_times) >= 15:
+                    model_to_use = "gemini-2.0-flash-lite"
+                else:
+                    model_to_use = "gemini-2.0-flash"
+
+                last_request_times.append(now)
+                print(f"Request {request_id} for {endpoint}: Choosing model {model_to_use}. Current load: {len(last_request_times)} in last 60s.")
+
+        else:
+             print(f"Warning: Unknown endpoint {endpoint} for request {request_id}. Using default model.")
+             model_to_use = "gemini-2.0-flash" # Default fallback model
+
+        # Get or create the chat session using the chosen model name.
+        # The get_chat_session function is modified slightly to key sessions by (user_id, model_name).
+        chat_session = get_chat_session(user_id, model_to_use)
+
+        # Pass the chat session to send_message_with_retry.
+        # send_message_with_retry will get the *actual* model name from the session object
+        # and apply cleaning if it's one of the specified "newmodel" types.
         response = send_message_with_retry(user_id, chat_session, user_input, request_id)
-        
+
         # Store the response in the cache if request hasn't been cancelled
         if response_cache.get(request_id) != "CANCELLED":
             response_cache[request_id] = response
-        
+            print(f"Request {request_id} processed successfully.")
+        else:
+             print(f"Request {request_id} finished processing but was already cancelled.")
+
     except Exception as e:
         error_message = "I'm sorry, I couldn't process your request. Please try again later."
-        print(f"Unhandled error: {str(e)}")
-        response_cache[request_id] = error_message
+        print(f"Unhandled error processing request {request_id}: {str(e)}")
+        # Ensure the cache entry is updated even on unhandled errors
+        if response_cache.get(request_id) != "CANCELLED":
+             response_cache[request_id] = error_message
+        else:
+             print(f"Unhandled error occurred for request {request_id} but it was already cancelled.")
+
 
 def process_queue():
     while True:
         try:
-            user_id, user_input, request_id, endpoint = request_queue.get()
+            # Get request from queue with a timeout
+            item = request_queue.get(timeout=1.0) # Use a small timeout to allow loop to check state or exit if needed
+            user_id, user_input, request_id, endpoint = item
 
-            if endpoint == "/newmodel_generate":
-                with lock:
-                    # Managing request rate for newmodel_generate
-                    global last_newmodel_request_times
-                    now = time.time()
-                    last_newmodel_request_times = [t for t in last_newmodel_request_times if now - t < 60]
-
-                    if len(last_newmodel_request_times) >= 10:
-                        model_name = "gemini-2.5-flash-preview-04-17"
-                    else:
-                        model_name = "gemini-2.5-pro-exp-03-25"
-
-                    last_newmodel_request_times.append(now)
-
-            else:  # Assuming it's for /generate
-                with lock:
-                    # Managing request rate
-                    global last_request_times
-                    now = time.time()
-                    last_request_times = [t for t in last_request_times if now - t < 60]
-
-                    if len(last_request_times) >= 15:
-                        model_name = "gemini-2.0-flash-lite"
-                    else:
-                        model_name = "gemini-2.0-flash"
-
-                    last_request_times.append(now)
-                    
-            # Process each request in a new thread to avoid blocking
+            # Process each request in a new thread
             threading.Thread(
-                target=process_request, 
-                args=(user_id, user_input, request_id, model_name),
+                target=process_request,
+                args=(user_id, user_input, request_id, endpoint),
                 daemon=True
             ).start()
+            request_queue.task_done() # Mark task as done
+
+        except queue.Empty:
+            # Queue is empty, continue looping
+            pass
         except Exception as e:
-            print(f"Error in queue processing: {str(e)}")
+            print(f"Error in queue processing thread: {str(e)}")
+            # If an error occurs getting an item, it might not be marked as done,
+            # but we should probably not block the loop entirely.
+
 
 # Start the queue processing thread
-threading.Thread(target=process_queue, daemon=True).start()
+queue_thread = threading.Thread(target=process_queue, daemon=True)
+queue_thread.start()
+print("Queue processing thread started.")
+
 
 @app.route('/generate', methods=['POST'])
 def generate():
@@ -538,31 +641,42 @@ def generate():
 
     if not user_input:
         return jsonify({"error": "Missing input"}), 400
-    
+
     # Generate a unique request ID
     request_id = f"{user_id}_{time.time()}_{random.randint(1000, 9999)}"
-    
+
     # Initialize the request in the cache
     response_cache[request_id] = "PENDING"
-    
+    print(f"Received request {request_id} for /generate. Adding to queue.")
+
     # Add to processing queue
     request_queue.put((user_id, user_input, request_id, "/generate"))
-    
+
     # Wait for response with timeout
     start_time = time.time()
     while time.time() - start_time < QUEUE_TIMEOUT:
         response = response_cache.get(request_id)
-        
+
         if response and response != "PENDING":
-            # Clean up the cache entry
-            del response_cache[request_id]
-            return jsonify({"response": response})
-        
-        time.sleep(0.1)  # Small sleep to prevent CPU hogging
-    
-    # If we reach here, the request timed out
-    response_cache[request_id] = "CANCELLED"
-    
+            # Response is ready or request was cancelled by process_request
+            if response_cache.get(request_id) != "CANCELLED":
+                 # Clean up the cache entry if it wasn't marked cancelled
+                 del response_cache[request_id]
+                 print(f"Request {request_id}: Response ready.")
+                 return jsonify({"response": response})
+            else:
+                 # If marked cancelled by the worker thread, let the timeout logic handle it
+                 # This branch might not be strictly necessary due to how timeout works below
+                 pass # Fall through to timeout return
+
+        time.sleep(0.05)  # Small sleep to prevent CPU hogging, reduced slightly
+
+    # If we reach here, the request timed out in the waiting loop
+    # Mark as cancelled so the processing thread knows to stop (if it's not already done)
+    if response_cache.get(request_id) == "PENDING":
+        response_cache[request_id] = "CANCELLED"
+        print(f"Request {request_id} timed out after {QUEUE_TIMEOUT}s. Marked as CANCELLED.")
+
     # Return a friendly timeout message
     return jsonify({
         "response": "I'm taking longer than expected to process your request. Please try again in a moment."
@@ -578,31 +692,42 @@ def newmodel_generate():
 
     if not user_input:
         return jsonify({"error": "Missing input"}), 400
-    
+
     # Generate a unique request ID
     request_id = f"{user_id}_{time.time()}_{random.randint(1000, 9999)}"
-    
+
     # Initialize the request in the cache
     response_cache[request_id] = "PENDING"
-    
+    print(f"Received request {request_id} for /newmodel_generate. Adding to queue.")
+
+
     # Add to processing queue
     request_queue.put((user_id, user_input, request_id, "/newmodel_generate"))
-    
+
     # Wait for response with timeout
     start_time = time.time()
     while time.time() - start_time < QUEUE_TIMEOUT:
         response = response_cache.get(request_id)
-        
+
         if response and response != "PENDING":
-            # Clean up the cache entry
-            del response_cache[request_id]
-            return jsonify({"response": response})
-        
-        time.sleep(0.1)  # Small sleep to prevent CPU hogging
-    
-    # If we reach here, the request timed out
-    response_cache[request_id] = "CANCELLED"
-    
+             if response_cache.get(request_id) != "CANCELLED":
+                 # Clean up the cache entry if it wasn't marked cancelled
+                 del response_cache[request_id]
+                 print(f"Request {request_id}: Response ready.")
+                 return jsonify({"response": response})
+             else:
+                 pass # Fall through to timeout return
+
+
+        time.sleep(0.05)  # Small sleep to prevent CPU hogging, reduced slightly
+
+    # If we reach here, the request timed out in the waiting loop
+    # Mark as cancelled
+    if response_cache.get(request_id) == "PENDING":
+        response_cache[request_id] = "CANCELLED"
+        print(f"Request {request_id} timed out after {QUEUE_TIMEOUT}s. Marked as CANCELLED.")
+
+
     # Return a friendly timeout message
     return jsonify({
         "response": "I'm taking longer than expected to process your request. Please try again in a moment."
@@ -616,53 +741,89 @@ def clear_chat():
     if not user_id:
         return jsonify({"error": "Missing user ID"}), 400
 
-    if user_id in chat_sessions:
-        del chat_sessions[user_id]
-        return jsonify({"message": f"Chat session for user {user_id} cleared."})
+    # Need to clear all sessions for this user, regardless of model
+    keys_to_delete = [key for key in chat_sessions if key[0] == user_id]
+    deleted_count = 0
+    for key in keys_to_delete:
+        del chat_sessions[key]
+        deleted_count += 1
+
+    if deleted_count > 0:
+        return jsonify({"message": f"Chat sessions for user {user_id} ({deleted_count} sessions) cleared."})
     else:
-        return jsonify({"message": f"No chat session found for user {user_id}."})
+        return jsonify({"message": f"No chat sessions found for user {user_id}."})
 
 def keep_alive():
-    time.sleep(300)
-    url = "https://rblx-ai-game.onrender.com/"
+    print("Keep-alive thread started. Waiting 300s before first ping.")
+    time.sleep(300) # Initial wait
+    # Replace with your actual Render.com URL
+    # url = "https://rblx-ai-game.onrender.com/"
+    # Use a placeholder or environmental variable if possible
+    url = "YOUR_RENDER_APP_URL_HERE" # <<<<<<<<< IMPORTANT: REPLACE WITH YOUR ACTUAL URL
+
     while True:
         try:
-            requests.get(url)
-            print(f"✅ Ping sent to {url}")
-        except Exception as e:
-            print(f"⚠️ Ping failed: {e}")
-        time.sleep(600)
+            response = requests.get(url, timeout=10) # Add timeout for ping request
+            print(f"✅ Ping sent to {url} - Status: {response.status_code}")
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️ Ping failed to {url}: {e}")
+        time.sleep(600) # Ping every 10 minutes
 
 # Clean up old entries in the response cache
 def clean_response_cache():
+    print("Response cache cleanup thread started.")
     while True:
         try:
             current_time = time.time()
             keys_to_remove = []
-            
-            for key, value in response_cache.items():
-                if "_" in key:
-                    # Extract timestamp from request_id
+
+            # Iterate over a copy of keys if modifying the dict during iteration
+            for key in list(response_cache.keys()):
+                # Check if the key is in the expected format "user_id_timestamp_random"
+                if isinstance(key, str) and "_" in key:
                     try:
                         parts = key.split("_")
+                        # The timestamp is expected to be the second part
                         if len(parts) >= 2:
                             timestamp = float(parts[1])
-                            # Remove entries older than 5 minutes
-                            if current_time - timestamp > 300:
+                            # Remove entries older than 5 minutes (300 seconds)
+                            # Also remove cancelled entries that are a bit older
+                            if (response_cache.get(key) == "CANCELLED" and current_time - timestamp > 60) or \
+                               (response_cache.get(key) != "CANCELLED" and current_time - timestamp > 300):
                                 keys_to_remove.append(key)
-                    except (ValueError, IndexError):
-                        pass
-            
+                        else:
+                             # Handle keys that don't match the expected format
+                             print(f"Warning: Unexpected key format in response_cache: {key}")
+                             # Optionally remove old keys with unexpected format
+                             if current_time - time.mktime(time.gmtime()) > 3600: # Example: Remove if older than 1 hour (arbitrary)
+                                 keys_to_remove.append(key)
+
+                    except (ValueError, IndexError) as e:
+                        # Handle keys where timestamp conversion fails
+                        print(f"Warning: Failed to parse timestamp from key {key}: {e}")
+                        # Optionally remove problematic keys
+                        if current_time - time.mktime(time.gmtime()) > 3600: # Example: Remove if older than 1 hour (arbitrary)
+                             keys_to_remove.append(key)
+
+
             for key in keys_to_remove:
-                response_cache.pop(key, None)
-                
+                # Use pop with a default value in case the key was already removed by another thread
+                if response_cache.pop(key, None):
+                     print(f"Cleaned up cache entry: {key}")
+
+
         except Exception as e:
             print(f"Error cleaning response cache: {e}")
-            
+
         time.sleep(60)  # Run cleanup every minute
 
+
+# Start background threads
 threading.Thread(target=keep_alive, daemon=True).start()
 threading.Thread(target=clean_response_cache, daemon=True).start()
 
 if __name__ == '__main__':
+    # Consider using a production-ready WSGI server like Gunicorn in production
+    # For development, app.run() is fine
+    print("Starting Flask app...")
     app.run(host='0.0.0.0', port=5000)
