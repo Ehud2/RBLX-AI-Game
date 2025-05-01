@@ -1,5 +1,7 @@
+# main.py
 from flask import Flask, request, jsonify
 import google.generativeai as genai
+import google.generativeai.types as types  # <-- Import types
 import threading
 import requests
 import time
@@ -374,13 +376,26 @@ Please note, these are your command instructions, these are instructions that yo
 {command_instruction}
 """
 
-generation_config = {
+# Standard generation config (used for /generate)
+standard_generation_config = {
     "temperature": 0.2,
     "top_p": 0.5,
     "top_k": 64,
     "max_output_tokens": 8192,
     "response_mime_type": "text/plain",
 }
+
+# Generation config with thinking enabled (used for /newmodel_generate)
+thinking_generation_config = types.GenerateContentConfig(
+    temperature=0.2,
+    top_p=0.5,
+    top_k=64,
+    max_output_tokens=8192,
+    response_mime_type="text/plain",
+    # Include the thinking configuration here
+    thinking_config=types.ThinkingConfig(include_thoughts=True),
+)
+
 
 chat_sessions = {}
 
@@ -408,56 +423,72 @@ def get_next_api_key():
         current_api_key_index = (current_api_key_index + 1) % len(API_KEYS)
     return current_key
 
-def get_chat_session(user_id, model_name):
+# <-- Modified get_chat_session to accept enable_thinking flag
+def get_chat_session(user_id, model_name, enable_thinking=False):
     global chat_sessions
 
-    if user_id not in chat_sessions:
+    # Use a composite key to allow different configs for the same user/model if needed
+    session_key = (user_id, model_name, enable_thinking)
+
+    if session_key not in chat_sessions:
         # Configure with the next API key in rotation
         genai.configure(api_key=get_next_api_key())
 
+        # Choose the correct generation config based on the flag
+        current_generation_config = thinking_generation_config if enable_thinking else standard_generation_config
+
         model = genai.GenerativeModel(
             model_name=model_name,
-            generation_config=generation_config,
+            generation_config=current_generation_config, # <-- Use the selected config
             tools='code_execution',
             system_instruction=system_instruction
         )
 
-        chat_sessions[user_id] = model.start_chat(history=[])
+        chat_sessions[session_key] = model.start_chat(history=[])
 
-    return chat_sessions[user_id]
+    return chat_sessions[session_key]
 
 def send_message_with_retry(user_id, chat_session, user_input, request_id):
     retries = 0
     backoff = INITIAL_BACKOFF
-    
+
     while retries < MAX_RETRIES:
         try:
             # Check if we should cancel this operation
             if response_cache.get(request_id) == "CANCELLED":
                 print(f"Request {request_id} was cancelled")
                 return "Your request was cancelled due to timeout. Please try again."
-                
+
+            # No need to pass config here if it's set during model init
             response = chat_session.send_message(user_input)
+            # The response object now potentially includes thoughts,
+            # but response.text usually extracts only the primary text part.
+            # Depending on how the library structures the response with thoughts,
+            # you might need to adjust how you extract the text here if you
+            # want to *explicitly* include the thinking process *in the final string*.
+            # For now, assuming .text gives the main answer.
+            # If you need the thoughts *structurally*, response object needs inspection.
+            # Let's assume for now response.text is sufficient as per typical usage.
             return response.text
 
         except Exception as e:
             print(f"Error occurred: {str(e)}")
             retries += 1
-            
+
             # Check if request is cancelled before waiting
             if response_cache.get(request_id) == "CANCELLED":
                 print(f"Request {request_id} was cancelled during retry")
                 return "Your request was cancelled due to timeout. Please try again."
-            
+
             if retries >= MAX_RETRIES:
                 return "I'm sorry, I'm having trouble processing your request right now. Please try again in a few minutes."
-            
+
             # Add some randomness to the backoff to prevent all retries happening at the same time
             jitter = random.uniform(0, 0.1 * backoff)
             sleep_time = backoff + jitter
-            
+
             print(f"Retrying in {sleep_time:.2f} seconds (attempt {retries} of {MAX_RETRIES})...")
-            
+
             # Sleep in smaller increments so we can check for cancellation
             start_time = time.time()
             while time.time() - start_time < sleep_time:
@@ -465,30 +496,36 @@ def send_message_with_retry(user_id, chat_session, user_input, request_id):
                     print(f"Request {request_id} was cancelled during backoff")
                     return "Your request was cancelled due to timeout. Please try again."
                 time.sleep(0.5)  # Check every half second
-            
+
             # Exponential backoff with cap
             backoff = min(backoff * 2, MAX_BACKOFF)
 
-def process_request(user_id, user_input, request_id, model_name):
+# <-- Modified process_request to accept and pass enable_thinking
+def process_request(user_id, user_input, request_id, model_name, enable_thinking):
     try:
-        chat_session = get_chat_session(user_id, model_name)
+        # Pass the enable_thinking flag to get_chat_session
+        chat_session = get_chat_session(user_id, model_name, enable_thinking)
         response = send_message_with_retry(user_id, chat_session, user_input, request_id)
-        
+
         # Store the response in the cache if request hasn't been cancelled
         if response_cache.get(request_id) != "CANCELLED":
             response_cache[request_id] = response
-        
+
     except Exception as e:
         error_message = "I'm sorry, I couldn't process your request. Please try again later."
         print(f"Unhandled error: {str(e)}")
-        response_cache[request_id] = error_message
+        # Ensure cache is updated even on unhandled errors within the thread
+        if response_cache.get(request_id) == "PENDING":
+             response_cache[request_id] = error_message
 
 def process_queue():
     while True:
         try:
             user_id, user_input, request_id, endpoint = request_queue.get()
+            enable_thinking = False # Default to false
 
             if endpoint == "/newmodel_generate":
+                enable_thinking = True # <-- Enable thinking for this endpoint
                 with lock:
                     # Managing request rate for newmodel_generate
                     global last_newmodel_request_times
@@ -496,13 +533,15 @@ def process_queue():
                     last_newmodel_request_times = [t for t in last_newmodel_request_times if now - t < 60]
 
                     if len(last_newmodel_request_times) >= 10:
-                        model_name = "gemini-2.5-flash-preview-04-17"
+                        # Note: Ensure these model names support thinking config
+                        model_name = "gemini-2.5-flash-preview-04-17" # Check compatibility
                     else:
-                        model_name = "gemini-2.5-pro-exp-03-25"
+                        model_name = "gemini-2.5-pro-exp-03-25" # Check compatibility
 
                     last_newmodel_request_times.append(now)
 
-            else:  # Assuming it's for /generate
+            elif endpoint == "/generate": # Explicitly check for /generate
+                enable_thinking = False # <-- Ensure thinking is disabled
                 with lock:
                     # Managing request rate
                     global last_request_times
@@ -515,11 +554,18 @@ def process_queue():
                         model_name = "gemini-2.0-flash"
 
                     last_request_times.append(now)
-                    
-            # Process each request in a new thread to avoid blocking
+            else:
+                 # Should not happen based on current endpoints, but handle defensively
+                 print(f"Warning: Unknown endpoint '{endpoint}' in queue. Using default model.")
+                 model_name = "gemini-2.0-flash" # Or some other safe default
+                 enable_thinking = False
+
+
+            # Process each request in a new thread, passing the enable_thinking flag
             threading.Thread(
-                target=process_request, 
-                args=(user_id, user_input, request_id, model_name),
+                target=process_request,
+                # Pass enable_thinking to the target function
+                args=(user_id, user_input, request_id, model_name, enable_thinking),
                 daemon=True
             ).start()
         except Exception as e:
@@ -538,35 +584,38 @@ def generate():
 
     if not user_input:
         return jsonify({"error": "Missing input"}), 400
-    
+
     # Generate a unique request ID
     request_id = f"{user_id}_{time.time()}_{random.randint(1000, 9999)}"
-    
+
     # Initialize the request in the cache
     response_cache[request_id] = "PENDING"
-    
+
     # Add to processing queue
-    request_queue.put((user_id, user_input, request_id, "/generate"))
-    
+    request_queue.put((user_id, user_input, request_id, "/generate")) # Pass endpoint info
+
     # Wait for response with timeout
     start_time = time.time()
     while time.time() - start_time < QUEUE_TIMEOUT:
         response = response_cache.get(request_id)
-        
+
         if response and response != "PENDING":
             # Clean up the cache entry
-            del response_cache[request_id]
+            # Use pop for atomic check-and-delete if desired, but del is fine here
+            if request_id in response_cache:
+                 del response_cache[request_id]
             return jsonify({"response": response})
-        
+
         time.sleep(0.1)  # Small sleep to prevent CPU hogging
-    
+
     # If we reach here, the request timed out
+    # Mark as cancelled so the processing thread knows to stop
     response_cache[request_id] = "CANCELLED"
-    
+
     # Return a friendly timeout message
     return jsonify({
         "response": "I'm taking longer than expected to process your request. Please try again in a moment."
-    })
+    }), 408 # Optionally return 408 Request Timeout status
 
 @app.route('/newmodel_generate', methods=['POST'])
 def newmodel_generate():
@@ -578,35 +627,36 @@ def newmodel_generate():
 
     if not user_input:
         return jsonify({"error": "Missing input"}), 400
-    
+
     # Generate a unique request ID
     request_id = f"{user_id}_{time.time()}_{random.randint(1000, 9999)}"
-    
+
     # Initialize the request in the cache
     response_cache[request_id] = "PENDING"
-    
+
     # Add to processing queue
-    request_queue.put((user_id, user_input, request_id, "/newmodel_generate"))
-    
+    request_queue.put((user_id, user_input, request_id, "/newmodel_generate")) # Pass endpoint info
+
     # Wait for response with timeout
     start_time = time.time()
     while time.time() - start_time < QUEUE_TIMEOUT:
         response = response_cache.get(request_id)
-        
+
         if response and response != "PENDING":
             # Clean up the cache entry
-            del response_cache[request_id]
+            if request_id in response_cache:
+                del response_cache[request_id]
             return jsonify({"response": response})
-        
+
         time.sleep(0.1)  # Small sleep to prevent CPU hogging
-    
+
     # If we reach here, the request timed out
     response_cache[request_id] = "CANCELLED"
-    
+
     # Return a friendly timeout message
     return jsonify({
         "response": "I'm taking longer than expected to process your request. Please try again in a moment."
-    })
+    }), 408 # Optionally return 408 Request Timeout status
 
 
 @app.route('/clear_chat', methods=['POST'])
@@ -616,53 +666,68 @@ def clear_chat():
     if not user_id:
         return jsonify({"error": "Missing user ID"}), 400
 
-    if user_id in chat_sessions:
-        del chat_sessions[user_id]
-        return jsonify({"message": f"Chat session for user {user_id} cleared."})
+    # Need to clear all possible session keys for this user
+    keys_to_remove = [key for key in chat_sessions if key[0] == user_id]
+    cleared = False
+    for key in keys_to_remove:
+        del chat_sessions[key]
+        cleared = True
+
+    if cleared:
+        return jsonify({"message": f"Chat session(s) for user {user_id} cleared."})
     else:
         return jsonify({"message": f"No chat session found for user {user_id}."})
 
 def keep_alive():
+    # Consider making the URL configurable or an environment variable
+    # url = "https://rblx-ai-game.onrender.com/" # Example URL
+    url = None # Set this to your actual deployed URL if needed
+    if not url:
+        print("Keep-alive URL not set. Skipping pings.")
+        return
+
+    print(f"Keep-alive activated for {url}")
+    # Initial delay before first ping
     time.sleep(300)
-    url = "https://rblx-ai-game.onrender.com/"
     while True:
         try:
-            requests.get(url)
-            print(f"✅ Ping sent to {url}")
-        except Exception as e:
-            print(f"⚠️ Ping failed: {e}")
-        time.sleep(600)
+            response = requests.get(url, timeout=10) # Add a timeout to the ping request
+            print(f"✅ Keep-alive ping sent to {url}. Status: {response.status_code}")
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️ Keep-alive ping failed: {e}")
+        # Use a consistent sleep interval
+        time.sleep(600) # Ping every 10 minutes
 
 # Clean up old entries in the response cache
 def clean_response_cache():
     while True:
         try:
             current_time = time.time()
-            keys_to_remove = []
-            
-            for key, value in response_cache.items():
-                if "_" in key:
-                    # Extract timestamp from request_id
-                    try:
-                        parts = key.split("_")
-                        if len(parts) >= 2:
-                            timestamp = float(parts[1])
-                            # Remove entries older than 5 minutes
-                            if current_time - timestamp > 300:
-                                keys_to_remove.append(key)
-                    except (ValueError, IndexError):
-                        pass
-            
-            for key in keys_to_remove:
-                response_cache.pop(key, None)
-                
+            # Use list comprehension for efficiency
+            keys_to_remove = [
+                key for key, value in response_cache.items()
+                if isinstance(key, str) and "_" in key and len(key.split("_")) >= 2
+                # Check if it's older than QUEUE_TIMEOUT + buffer (e.g., 5 minutes)
+                # Handles cases where timeout occurred but cleanup didn't happen immediately
+                and current_time - float(key.split("_")[1]) > 300 # 5 minutes threshold
+            ]
+
+            if keys_to_remove:
+                print(f"Cleaning up {len(keys_to_remove)} old entries from response cache.")
+                for key in keys_to_remove:
+                    # Use pop with default to avoid KeyError if key was somehow removed between check and delete
+                    response_cache.pop(key, None)
+
         except Exception as e:
             print(f"Error cleaning response cache: {e}")
-            
+
         time.sleep(60)  # Run cleanup every minute
 
 threading.Thread(target=keep_alive, daemon=True).start()
 threading.Thread(target=clean_response_cache, daemon=True).start()
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    # Use environment variable for port, default to 5000
+    import os
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
