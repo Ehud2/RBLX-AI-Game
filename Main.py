@@ -5,6 +5,7 @@ import requests
 import time
 import queue
 import random
+from google.genai import types # הוסף שורה זו
 
 app = Flask(__name__)
 
@@ -426,9 +427,23 @@ def get_chat_session(user_id, model_name):
 
     return chat_sessions[user_id]
 
-def send_message_with_retry(user_id, chat_session, user_input, request_id):
+def send_message_with_retry(user_id, chat_session, user_input, request_id, model_name): # הוסף model_name
     retries = 0
     backoff = INITIAL_BACKOFF
+    
+    # Define the models that require thinking disabled
+    models_to_disable_thinking = ["gemini-2.5-pro-exp-03-25", "gemini-2.5-flash-preview-04-17"]
+
+    # Create a mutable copy of the base generation_config
+    current_generation_config = generation_config.copy()
+
+    # Check if the current model is one of the affected ones and disable thinking
+    if model_name in models_to_disable_thinking:
+         # Add or update thinking_config to disable thinking
+         # Use types.ThinkingConfig as shown in documentation
+         current_generation_config["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+         print(f"Disabling thinking for model: {model_name}") # הדפסה לצורך דיבוג
+
     
     while retries < MAX_RETRIES:
         try:
@@ -437,7 +452,8 @@ def send_message_with_retry(user_id, chat_session, user_input, request_id):
                 print(f"Request {request_id} was cancelled")
                 return "Your request was cancelled due to timeout. Please try again."
                 
-            response = chat_session.send_message(user_input)
+            # Pass the potentially modified generation_config to send_message
+            response = chat_session.send_message(user_input, generation_config=current_generation_config) 
             return response.text
 
         except Exception as e:
@@ -469,10 +485,12 @@ def send_message_with_retry(user_id, chat_session, user_input, request_id):
             # Exponential backoff with cap
             backoff = min(backoff * 2, MAX_BACKOFF)
 
-def process_request(user_id, user_input, request_id, model_name):
+def process_request(user_id, user_input, request_id, model_name): # הוסף model_name
     try:
-        chat_session = get_chat_session(user_id, model_name)
-        response = send_message_with_retry(user_id, chat_session, user_input, request_id)
+        # The chat session is retrieved based on user_id and model_name
+        chat_session = get_chat_session(user_id, model_name) 
+        # Pass model_name to send_message_with_retry
+        response = send_message_with_retry(user_id, chat_session, user_input, request_id, model_name) 
         
         # Store the response in the cache if request hasn't been cancelled
         if response_cache.get(request_id) != "CANCELLED":
@@ -482,6 +500,8 @@ def process_request(user_id, user_input, request_id, model_name):
         error_message = "I'm sorry, I couldn't process your request. Please try again later."
         print(f"Unhandled error: {str(e)}")
         response_cache[request_id] = error_message
+
+
 
 def process_queue():
     while True:
