@@ -426,38 +426,47 @@ def get_chat_session(user_id, model_name):
 
     return chat_sessions[user_id]
 
-def send_message_with_retry(user_id, chat_session, user_input, request_id):
+def send_message_with_retry(user_id, chat_session, user_input, request_id, model_name): # Add model_name parameter
     retries = 0
     backoff = INITIAL_BACKOFF
-    
+
+    # Define configuration for the send_message call
+    # Set thinking_budget=0 only for the 2.5 models
+    gen_config_obj = None
+    if model_name in ["gemini-2.5-flash-preview-04-17", "gemini-2.5-pro-exp-03-25"]:
+         gen_config_obj = types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_budget=0))
+
+
     while retries < MAX_RETRIES:
         try:
             # Check if we should cancel this operation
             if response_cache.get(request_id) == "CANCELLED":
                 print(f"Request {request_id} was cancelled")
                 return "Your request was cancelled due to timeout. Please try again."
-                
-            response = chat_session.send_message(user_input)
+
+            # Send message with the optional config
+            response = chat_session.send_message(user_input, config=gen_config_obj) # Pass the config object
+
             return response.text
 
         except Exception as e:
             print(f"Error occurred: {str(e)}")
             retries += 1
-            
+
             # Check if request is cancelled before waiting
             if response_cache.get(request_id) == "CANCELLED":
                 print(f"Request {request_id} was cancelled during retry")
                 return "Your request was cancelled due to timeout. Please try again."
-            
+
             if retries >= MAX_RETRIES:
                 return "I'm sorry, I'm having trouble processing your request right now. Please try again in a few minutes."
-            
+
             # Add some randomness to the backoff to prevent all retries happening at the same time
             jitter = random.uniform(0, 0.1 * backoff)
             sleep_time = backoff + jitter
-            
+
             print(f"Retrying in {sleep_time:.2f} seconds (attempt {retries} of {MAX_RETRIES})...")
-            
+
             # Sleep in smaller increments so we can check for cancellation
             start_time = time.time()
             while time.time() - start_time < sleep_time:
@@ -465,23 +474,28 @@ def send_message_with_retry(user_id, chat_session, user_input, request_id):
                     print(f"Request {request_id} was cancelled during backoff")
                     return "Your request was cancelled due to timeout. Please try again."
                 time.sleep(0.5)  # Check every half second
-            
+
             # Exponential backoff with cap
             backoff = min(backoff * 2, MAX_BACKOFF)
 
-def process_request(user_id, user_input, request_id, model_name):
+
+def process_request(user_id, user_input, request_id, model_name): # model_name is already here
     try:
+        # Get the chat session for the user and model
         chat_session = get_chat_session(user_id, model_name)
-        response = send_message_with_retry(user_id, chat_session, user_input, request_id)
-        
+
+        # Send the message using the retry logic, passing the model_name
+        response = send_message_with_retry(user_id, chat_session, user_input, request_id, model_name) # Pass model_name
+
         # Store the response in the cache if request hasn't been cancelled
         if response_cache.get(request_id) != "CANCELLED":
             response_cache[request_id] = response
-        
+
     except Exception as e:
         error_message = "I'm sorry, I couldn't process your request. Please try again later."
         print(f"Unhandled error: {str(e)}")
         response_cache[request_id] = error_message
+        
 
 def process_queue():
     while True:
