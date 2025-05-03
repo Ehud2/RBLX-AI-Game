@@ -555,7 +555,7 @@ def process_queue():
                     if len(last_newmodel_request_times) >= 10:
                         model_name = "gemini-2.5-flash-preview-04-17"
                     else:
-                        model_name = "gemini-2.5-pro-exp-03-25"
+                        model_name = "gemini-2.5-flash-preview-04-17"
 
                     # Record the time for this request for the rate limit
                     last_newmodel_request_times.append(now)
