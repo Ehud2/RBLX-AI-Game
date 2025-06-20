@@ -510,9 +510,9 @@ def process_queue():
                     last_request_times = [t for t in last_request_times if now - t < 60]
 
                     if len(last_request_times) >= 15:
-                        model_name = "gemini-2.5-flash"
+                        model_name = "gemini-2.0-flash"
                     else:
-                        model_name = "gemini-2.5-pro"
+                        model_name = "gemini-2.5-flash"
 
                     last_request_times.append(now)
                     
