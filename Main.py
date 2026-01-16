@@ -10,11 +10,7 @@ app = Flask(__name__)
 
 
 API_KEYS = [
-    "AIzaSyBckr5izy2EhYK1T-xBgRNJyiYj1eQPAXw",
-    "AIzaSyB4CnklLb_OvxEhRNHsFCkne1NYs8M0sEc",
-    "AIzaSyDDrx-i-OsLZjvm6ffZlM3jAXxZbAMqIkQ",
-    "AIzaSyBn3rOAjwLW79zUmmuEnQ10Og5KqGKkrE8",
-    "AIzaSyAeHI7qe7KHaqtL9JufMTJGLJsBKDKkh4Y"
+    "AIzaSyBzv5sx84wKGs7PyUEXgWUB96JNesr4v_E",
 ]
 
 
@@ -496,7 +492,7 @@ def process_queue():
                     last_newmodel_request_times = [t for t in last_newmodel_request_times if now - t < 60]
 
                     if len(last_newmodel_request_times) >= 10:
-                        model_name = "gemini-2.5-flash-lite-preview-06-17"
+                        model_name = "gemini‑2.5‑flash‑lite"
                     else:
                         model_name = "gemini-2.5-flash"
 
@@ -510,9 +506,9 @@ def process_queue():
                     last_request_times = [t for t in last_request_times if now - t < 60]
 
                     if len(last_request_times) >= 15:
-                        model_name = "gemini-2.0-flash-lite"
+                        model_name = "gemini‑2.5‑flash‑lite"
                     else:
-                        model_name = "gemini-2.0-flash"
+                        model_name = "gemini‑2.5‑flash‑lite"
 
                     last_request_times.append(now)
                     
