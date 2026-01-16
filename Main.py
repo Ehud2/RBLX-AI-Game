@@ -1,21 +1,26 @@
-from flask import Flask, request, jsonify
-import google.generativeai as genai
-import threading
-import requests
+import base64
+import os
 import time
+import threading
 import queue
 import random
+import requests
+from flask import Flask, request, jsonify
+from google import genai
+from google.genai import types
 
 app = Flask(__name__)
 
-
+# Configuration
 API_KEYS = [
     "AIzaSyBzv5sx84wKGs7PyUEXgWUB96JNesr4v_E",
 ]
-
-
 current_api_key_index = 0
 
+MAX_RETRIES = 10
+INITIAL_BACKOFF = 2
+MAX_BACKOFF = 60
+QUEUE_TIMEOUT = 28
 
 command_instruction = """
 - You will always say "Set Face To:" at the end of each of your replies without exception, you will say it with one of these options only: Angry, Laughing, Happy, Confused, Sad, Crying, Smile, Confident, Fear, Bored, Relaxed, Nervous, Disgusted, for example: Set Face To: Smile, so that it doesn't happen that you send even one message that doesn't have this sentence at the end of your reply.
@@ -370,27 +375,6 @@ Please note, these are your command instructions, these are instructions that yo
 {command_instruction}
 """
 
-import base64
-import os
-import time
-import threading
-import queue
-import random
-import requests
-from flask import Flask, request, jsonify
-from google import genai
-from google.genai import types
-
-app = Flask(__name__)
-
-# Configuration
-API_KEYS = ["YOUR_API_KEY_1", "YOUR_API_KEY_2"] # וודא שהרשימה מלאה
-current_api_key_index = 0
-MAX_RETRIES = 10
-INITIAL_BACKOFF = 2
-MAX_BACKOFF = 60
-QUEUE_TIMEOUT = 28
-
 chat_sessions = {}
 request_queue = queue.Queue()
 response_cache = {}
@@ -413,9 +397,10 @@ def send_message_with_retry(user_id, user_input, request_id, model_name, thinkin
     backoff = INITIAL_BACKOFF
     client = get_client()
     
-    # ניהול היסטוריה בסיסי (סימולציית chat session)
     if user_id not in chat_sessions:
         chat_sessions[user_id] = []
+        if system_instruction:
+            chat_sessions[user_id].append(types.Content(role="system", parts=[types.Part.from_text(text=system_instruction)]))
     
     chat_sessions[user_id].append(types.Content(role="user", parts=[types.Part.from_text(text=user_input)]))
     
@@ -440,7 +425,8 @@ def send_message_with_retry(user_id, user_input, request_id, model_name, thinkin
             ):
                 if response_cache.get(request_id) == "CANCELLED":
                     return "Your request was cancelled due to timeout."
-                full_response_text += chunk.text
+                if chunk.text:
+                    full_response_text += chunk.text
 
             chat_sessions[user_id].append(types.Content(role="model", parts=[types.Part.from_text(text=full_response_text)]))
             return full_response_text
@@ -464,7 +450,7 @@ def send_message_with_retry(user_id, user_input, request_id, model_name, thinkin
                 time.sleep(0.5)
             
             backoff = min(backoff * 2, MAX_BACKOFF)
-            client = get_client() # החלפת מפתח בניסיון חוזר
+            client = get_client()
 
 def process_request(user_id, user_input, request_id, model_name, thinking_budget):
     try:
@@ -485,20 +471,16 @@ def process_queue():
                 with lock:
                     global last_newmodel_request_times
                     last_newmodel_request_times = [t for t in last_newmodel_request_times if now - t < 60]
-                    if len(last_newmodel_request_times) >= 10:
-                        model_name = "gemini-flash-latest"
-                    else:
-                        model_name = "gemini-flash-latest"
+                    # משתמש ב-gemini-flash-latest עם תקציב חשיבה 1-
+                    model_name = "gemini-flash-latest"
                     last_newmodel_request_times.append(now)
                 thinking_budget = -1
             else:
                 with lock:
                     global last_request_times
                     last_request_times = [t for t in last_request_times if now - t < 60]
-                    if len(last_request_times) >= 15:
-                        model_name = "gemini-flash-lite-latest"
-                    else:
-                        model_name = "gemini-flash-lite-latest"
+                    # משתמש ב-gemini-flash-lite-latest עם תקציב חשיבה 0
+                    model_name = "gemini-flash-lite-latest"
                     last_request_times.append(now)
                 thinking_budget = 0
 
